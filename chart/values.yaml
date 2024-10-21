@@ -1,0 +1,88 @@
+deployment:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    maxSurge: 1
+    maxUnavailable: 0
+  containers:
+    - name: oauth2-proxy
+      image: 
+        repository: quay.io/oauth2-proxy/oauth2-proxy
+        tag: latest
+      ports:
+        - name: http
+          containerPort: 4180
+      args:
+        - --http-address=0.0.0.0:4180
+        - --ssl-insecure-skip-verify=true
+        - --provider=oidc
+        - --upstream=file:///dev/null
+        - --code-challenge-method=S256
+        - --email-domain=*
+        - --whitelist-domain=.@vault(secrets/data/domain main | DOMAIN_NAME)
+        - --cookie-domain=auth.@vault(secrets/data/domain main | DOMAIN_NAME)
+        - --pass-access-token=true
+        - --skip-provider-button=true
+        - --redirect-url=https://auth.@vault(secrets/data/domain main | DOMAIN_NAME)/oauth2/callback
+      env:
+        - name: OAUTH2_PROXY_PROVIDER_DISPLAY_NAME
+          value: Auth0
+      envFromSecret:
+        - secretName: auth0-secret
+          envs:
+            - name: OAUTH2_PROXY_OIDC_ISSUER_URL
+              key: ISSUER_URL
+            - name: OAUTH2_PROXY_CLIENT_ID
+              key: CLIENT_ID
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              key: CLIENT_SECRET
+        - secretName: oauth-secret
+          envs:
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              key: COOKIE_SECRET
+      resources:
+        requests:
+          cpu: 0m
+          memory: 0Mi
+        limits:
+          cpu: 500m
+          memory: 128Mi
+
+ingress:
+  name: ingress
+  tls:
+    secretName: tls-secret
+  hosts:
+    - host: auth.@vault(secrets/data/domain main | DOMAIN_NAME)
+      paths:
+        - path: "/"
+          pathType: Prefix
+          serviceName: service
+          servicePort: http
+
+services:
+  - name: service
+    type: ClusterIP
+    ports:
+      - name: http
+        protocol: TCP
+        port: 80
+        targetPort: 4180
+
+vaultSecrets:
+  - name: auth0-secret
+    path: secrets/auth0
+    templates:
+      ISSUER_URL: "https://{% .Secrets.domain %}/"
+      CLIENT_ID: "{% .Secrets.client_id %}"
+      CLIENT_SECRET: "{% .Secrets.client_secret %}"
+  - name: oauth-secret
+    path: secrets/oauth2
+    templates:
+      COOKIE_SECRET: "{% .Secrets.cookie_secret %}"
+  - name: tls-secret
+    type: kubernetes.io/tls
+    path: secrets/certificates
+    templates:
+      tls.crt: "{% .Secrets.tls_crt %}"
+      tls.key: "{% .Secrets.tls_key %}"
