@@ -1,0 +1,85 @@
+deployment:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    maxSurge: 1
+    maxUnavailable: 0
+  containers:
+    - name: oauth2-proxy
+      image: 
+        repository: quay.io/oauth2-proxy/oauth2-proxy
+        tag: latest
+      ports:
+        - name: http
+          containerPort: 4180
+      args:
+        - --http-address=0.0.0.0:4180
+        - --ssl-insecure-skip-verify=true
+        - --provider=oidc
+        - --upstream=file:///dev/null
+        - --code-challenge-method=S256
+        - --email-domain=*
+        - --whitelist-domain=.@vault(secrets/data/domain main | DOMAIN_NAME)
+        - --cookie-domain=.@vault(secrets/data/domain main | DOMAIN_NAME)
+        - --pass-access-token=true
+        - --skip-provider-button=true
+        - --redirect-url=/oauth2/callback
+        - --reverse-proxy=true
+        - --session-store-type=redis
+        - --redis-connection-url=redis://service.redis.svc.cluster.local
+        - --cookie-expire=0
+      env:
+        - name: OAUTH2_PROXY_PROVIDER_DISPLAY_NAME
+          value: Auth0
+      envFromSecret:
+        - secretName: auth0-secret
+          envs:
+            - name: OAUTH2_PROXY_OIDC_ISSUER_URL
+              key: ISSUER_URL
+            - name: OAUTH2_PROXY_CLIENT_ID
+              key: CLIENT_ID
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              key: CLIENT_SECRET
+            - name: OAUTH2_PROXY_BACKEND_LOGOUT_URL
+              key: LOGOUT_URL
+        - secretName: oauth-secret
+          envs:
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              key: COOKIE_SECRET
+        - secretName: redis-secret
+          envs:
+            - name: OAUTH2_PROXY_REDIS_PASSWORD
+              key: REDIS_PASSWORD
+      resources:
+        requests:
+          cpu: 0m
+          memory: 0Mi
+        limits:
+          cpu: 500m
+          memory: 128Mi
+
+services:
+  - name: service
+    type: ClusterIP
+    ports:
+      - name: http
+        protocol: TCP
+        port: 80
+        targetPort: 4180
+
+vaultSecrets:
+  - name: auth0-secret
+    path: secrets/auth0
+    templates:
+      ISSUER_URL: "https://{% .Secrets.domain %}/"
+      CLIENT_ID: "{% .Secrets.client_id %}"
+      CLIENT_SECRET: "{% .Secrets.client_secret %}"
+      LOGOUT_URL: "https://{% .Secrets.domain %}/v2/logout?client_id={% .Secrets.client_id %}&returnTo=https%3A%2F%2F{% .Secrets.domain %}"
+  - name: oauth-secret
+    path: secrets/oauth2
+    templates:
+      COOKIE_SECRET: "{% .Secrets.cookie_secret %}"
+  - name: redis-secret
+    path: secrets/redis
+    templates:
+      REDIS_PASSWORD: "{% .Secrets.password %}"
